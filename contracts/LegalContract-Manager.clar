@@ -136,3 +136,185 @@
     )
 )
 
+(define-map contract-templates
+    uint 
+    {
+        name: (string-ascii 50),
+        content: (string-ascii 1000),
+        created-by: principal
+    }
+)
+
+(define-data-var next-template-id uint u1)
+
+(define-public (create-template (name (string-ascii 50)) (content (string-ascii 1000)))
+    (let
+        (
+            (template-id (var-get next-template-id))
+            (firm-data (unwrap! (map-get? legal-firms tx-sender) (err err-unauthorized)))
+        )
+        (asserts! (get active firm-data) (err err-unauthorized))
+        (map-set contract-templates template-id {
+            name: name,
+            content: content,
+            created-by: tx-sender
+        })
+        (var-set next-template-id (+ template-id u1))
+        (ok template-id)
+    )
+)
+
+(define-read-only (get-template (template-id uint))
+    (ok (map-get? contract-templates template-id))
+)
+
+
+(define-map contract-signatures
+    { contract-id: uint, signer: principal }
+    { signed: bool, timestamp: uint }
+)
+
+(define-public (sign-contract (contract-id uint))
+    (let
+        (
+            (contract (unwrap! (map-get? contracts contract-id) (err err-not-found)))
+            (is-party (index-of? (get parties contract) tx-sender))
+        )
+        (asserts! (not (is-none is-party)) (err err-unauthorized))
+        (map-set contract-signatures { contract-id: contract-id, signer: tx-sender }
+            { signed: true, timestamp: stacks-block-height }
+        )
+        (ok true)
+    )
+)
+
+(define-read-only (get-signature-status (contract-id uint) (signer principal))
+    (ok (map-get? contract-signatures { contract-id: contract-id, signer: signer }))
+)
+
+
+(define-map contract-versions
+    { contract-id: uint, version: uint }
+    {
+        content: (string-ascii 1000),
+        timestamp: uint,
+        modified-by: principal
+    }
+)
+
+(define-public (create-contract-version (contract-id uint) (content (string-ascii 1000)))
+    (let
+        (
+            (contract (unwrap! (map-get? contracts contract-id) (err err-not-found)))
+            (current-version (default-to u0 (get-last-version contract-id)))
+        )
+        (asserts! (is-eq (get creator contract) tx-sender) (err err-unauthorized))
+        (map-set contract-versions 
+            { contract-id: contract-id, version: (+ current-version u1) }
+            { content: content, timestamp: stacks-block-height, modified-by: tx-sender }
+        )
+        (ok (+ current-version u1))
+    )
+)
+
+(define-read-only (get-contract-version (contract-id uint) (version uint))
+    (ok (map-get? contract-versions { contract-id: contract-id, version: version }))
+)
+
+(define-private (get-last-version (contract-id uint))
+    (some u1)
+)
+
+
+(define-map disputes
+    uint
+    {
+        contract-id: uint,
+        filed-by: principal,
+        description: (string-ascii 500),
+        status: (string-ascii 20),
+        resolution: (optional (string-ascii 500))
+    }
+)
+
+(define-data-var next-dispute-id uint u1)
+
+(define-public (file-dispute (contract-id uint) (description (string-ascii 500)))
+    (let
+        (
+            (dispute-id (var-get next-dispute-id))
+            (contract (unwrap! (map-get? contracts contract-id) (err err-not-found)))
+        )
+        (asserts! (is-some (index-of? (get parties contract) tx-sender)) (err err-unauthorized))
+        (map-set disputes dispute-id {
+            contract-id: contract-id,
+            filed-by: tx-sender,
+            description: description,
+            status: "open",
+            resolution: none
+        })
+        (var-set next-dispute-id (+ dispute-id u1))
+        (ok dispute-id)
+    )
+)
+
+(define-map contract-expiration
+    uint
+    {
+        expiry-height: uint,
+        auto-renew: bool
+    }
+)
+
+(define-public (set-contract-expiration (contract-id uint) (blocks uint) (auto-renew bool))
+    (let
+        (
+            (contract (unwrap! (map-get? contracts contract-id) (err err-not-found)))
+        )
+        (asserts! (is-eq (get creator contract) tx-sender) (err err-unauthorized))
+        (map-set contract-expiration contract-id {
+            expiry-height: (+ stacks-block-height blocks),
+            auto-renew: auto-renew
+        })
+        (ok true)
+    )
+)
+
+(define-read-only (is-contract-expired (contract-id uint))
+    (match (map-get? contract-expiration contract-id)
+        expiry-data (ok (> stacks-block-height (get expiry-height expiry-data)))
+        (ok false)
+    )
+)
+
+
+(define-map contract-comments
+    { contract-id: uint, comment-id: uint }
+    {
+        author: principal,
+        content: (string-ascii 500),
+        timestamp: uint
+    }
+)
+
+(define-map contract-comment-counts uint uint)
+
+(define-public (add-comment (contract-id uint) (content (string-ascii 500)))
+    (let
+        (
+            (contract (unwrap! (map-get? contracts contract-id) (err err-not-found)))
+            (comment-count (default-to u0 (map-get? contract-comment-counts contract-id)))
+        )
+        (asserts! (is-some (index-of? (get parties contract) tx-sender)) (err err-unauthorized))
+        (map-set contract-comments 
+            { contract-id: contract-id, comment-id: (+ comment-count u1) }
+            { author: tx-sender, content: content, timestamp: stacks-block-height }
+        )
+        (map-set contract-comment-counts contract-id (+ comment-count u1))
+        (ok (+ comment-count u1))
+    )
+)
+
+(define-read-only (get-comment (contract-id uint) (comment-id uint))
+    (ok (map-get? contract-comments { contract-id: contract-id, comment-id: comment-id }))
+)
