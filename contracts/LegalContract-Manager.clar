@@ -318,3 +318,148 @@
 (define-read-only (get-comment (contract-id uint) (comment-id uint))
     (ok (map-get? contract-comments { contract-id: contract-id, comment-id: comment-id }))
 )
+
+
+(define-map contract-payments
+    uint 
+    {
+        amount: uint,
+        payer: principal,
+        payee: principal,
+        released: bool
+    }
+)
+
+(define-public (deposit-payment (contract-id uint))
+    (let
+        (
+            (contract (unwrap! (map-get? contracts contract-id) (err err-not-found)))
+            (payment-amount (unwrap! (map-get? contract-payments contract-id) (err err-not-found)))
+        )
+                ;; TODO: Check if payment is released
+        ;; (try! (stx-transfer? (get amount payment-amount) tx-sender (as-contract tx-sender)))
+        (ok (map-set contract-payments contract-id 
+            (merge payment-amount { released: false })))
+    )
+)
+
+(define-public (release-payment (contract-id uint))
+    (let
+        (
+            (contract (unwrap! (map-get? contracts contract-id) (err err-not-found)))
+            (payment (unwrap! (map-get? contract-payments contract-id) (err err-not-found)))
+        )
+        (asserts! (is-eq (get creator contract) tx-sender) (err err-unauthorized))
+        (asserts! (not (get released payment)) (err err-unauthorized))
+        ;; TODO: Check if payment is released
+        ;; (try! (as-contract (stx-transfer? (get amount payment) tx-sender (get payee payment))))
+        (ok (map-set contract-payments contract-id 
+            (merge payment { released: true })))
+    )
+)
+
+
+(define-map contract-milestones
+    { contract-id: uint, milestone-id: uint }
+    {
+        title: (string-ascii 100),
+        description: (string-ascii 500),
+        deadline: uint,
+        completed: bool,
+        verified-by: (optional principal)
+    }
+)
+
+(define-map milestone-counts uint uint)
+
+(define-public (add-milestone (contract-id uint) (title (string-ascii 100)) (description (string-ascii 500)) (deadline uint))
+    (let
+        (
+            (contract (unwrap! (map-get? contracts contract-id) (err err-not-found)))
+            (milestone-count (default-to u0 (map-get? milestone-counts contract-id)))
+        )
+        (asserts! (is-eq (get creator contract) tx-sender) (err err-unauthorized))
+        (map-set contract-milestones
+            { contract-id: contract-id, milestone-id: (+ milestone-count u1) }
+            {
+                title: title,
+                description: description,
+                deadline: deadline,
+                completed: false,
+                verified-by: none
+            }
+        )
+        (map-set milestone-counts contract-id (+ milestone-count u1))
+        (ok (+ milestone-count u1))
+    )
+)
+
+(define-public (verify-milestone (contract-id uint) (milestone-id uint))
+    (let
+        (
+            (contract (unwrap! (map-get? contracts contract-id) (err err-not-found)))
+            (milestone (unwrap! (map-get? contract-milestones { contract-id: contract-id, milestone-id: milestone-id }) (err err-not-found)))
+        )
+        (asserts! (is-some (index-of? (get parties contract) tx-sender)) (err err-unauthorized))
+        (ok (map-set contract-milestones
+            { contract-id: contract-id, milestone-id: milestone-id }
+            (merge milestone {
+                completed: true,
+                verified-by: (some tx-sender)
+            })
+        ))
+    )
+)
+
+
+(define-map contract-milestonesS
+    { contract-id: uint, milestone-id: uint }
+    {
+        title: (string-ascii 100),
+        description: (string-ascii 500),
+        deadline: uint,
+        completed: bool,
+        verified-by: (optional principal)
+    }
+)
+
+;; (define-map milestone-counts uint uint)
+
+(define-public (add-milestone-v1 (contract-id uint) (title (string-ascii 100)) (description (string-ascii 500)) (deadline uint))
+    (let
+        (
+            (contract (unwrap! (map-get? contracts contract-id) (err err-not-found)))
+            (milestone-count (default-to u0 (map-get? milestone-counts contract-id)))
+        )
+        (asserts! (is-eq (get creator contract) tx-sender) (err err-unauthorized))
+        (map-set contract-milestones
+            { contract-id: contract-id, milestone-id: (+ milestone-count u1) }
+            {
+                title: title,
+                description: description,
+                deadline: deadline,
+                completed: false,
+                verified-by: none
+            }
+        )
+        (map-set milestone-counts contract-id (+ milestone-count u1))
+        (ok (+ milestone-count u1))
+    )
+)
+
+(define-public (verify-milestone-v2 (contract-id uint) (milestone-id uint))
+    (let
+        (
+            (contract (unwrap! (map-get? contracts contract-id) (err err-not-found)))
+            (milestone (unwrap! (map-get? contract-milestones { contract-id: contract-id, milestone-id: milestone-id }) (err err-not-found)))
+        )
+        (asserts! (is-some (index-of? (get parties contract) tx-sender)) (err err-unauthorized))
+        (ok (map-set contract-milestones
+            { contract-id: contract-id, milestone-id: milestone-id }
+            (merge milestone {
+                completed: true,
+                verified-by: (some tx-sender)
+            })
+        ))
+    )
+)
