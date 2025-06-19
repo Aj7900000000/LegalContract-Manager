@@ -9,6 +9,28 @@
 (define-constant err-unauthorized (err u103))
 (define-constant err-invalid-status (err u104))
 
+
+(define-map contract-approval-requirements
+    uint
+    {
+        required-approvals: uint,
+        approvers: (list 10 principal),
+        created-by: principal
+    }
+)
+
+(define-map contract-approvals
+    { contract-id: uint, approver: principal }
+    {
+        approved: bool,
+        timestamp: uint,
+        comments: (string-ascii 200)
+    }
+)
+
+(define-map contract-approval-counts uint uint)
+
+
 ;; Data Variables
 (define-data-var next-contract-id uint u1)
 (define-data-var platform-fee uint u100) ;; in STX
@@ -461,5 +483,114 @@
                 verified-by: (some tx-sender)
             })
         ))
+    )
+)
+
+(define-public (set-approval-requirements (contract-id uint) (required-approvals uint) (approvers (list 10 principal)))
+    (let
+        (
+            (contract (unwrap! (map-get? contracts contract-id) err-not-found))
+        )
+        (asserts! (is-eq (get creator contract) tx-sender) err-unauthorized)
+        (asserts! (> required-approvals u0) err-invalid-status)
+        (asserts! (<= required-approvals (len approvers)) err-invalid-status)
+        (map-set contract-approval-requirements contract-id {
+            required-approvals: required-approvals,
+            approvers: approvers,
+            created-by: tx-sender
+        })
+        (map-set contract-approval-counts contract-id u0)
+        (ok true)
+    )
+)
+
+(define-public (submit-approval (contract-id uint) (comments (string-ascii 200)))
+    (let
+        (
+            (contract (unwrap! (map-get? contracts contract-id) err-not-found))
+            (approval-req (unwrap! (map-get? contract-approval-requirements contract-id) err-not-found))
+            (current-count (default-to u0 (map-get? contract-approval-counts contract-id)))
+            (existing-approval (map-get? contract-approvals { contract-id: contract-id, approver: tx-sender }))
+        )
+        (asserts! (is-some (index-of? (get approvers approval-req) tx-sender)) err-unauthorized)
+        (asserts! (is-none existing-approval) err-already-exists)
+        (map-set contract-approvals 
+            { contract-id: contract-id, approver: tx-sender }
+            {
+                approved: true,
+                timestamp: stacks-block-height,
+                comments: comments
+            }
+        )
+        (map-set contract-approval-counts contract-id (+ current-count u1))
+        (ok true)
+    )
+)
+
+(define-public (revoke-approval (contract-id uint))
+    (let
+        (
+            (contract (unwrap! (map-get? contracts contract-id) err-not-found))
+            (approval-req (unwrap! (map-get? contract-approval-requirements contract-id) err-not-found))
+            (existing-approval (unwrap! (map-get? contract-approvals { contract-id: contract-id, approver: tx-sender }) err-not-found))
+            (current-count (default-to u0 (map-get? contract-approval-counts contract-id)))
+        )
+        (asserts! (is-some (index-of? (get approvers approval-req) tx-sender)) err-unauthorized)
+        (asserts! (get approved existing-approval) err-invalid-status)
+        (map-delete contract-approvals { contract-id: contract-id, approver: tx-sender })
+        (map-set contract-approval-counts contract-id (- current-count u1))
+        (ok true)
+    )
+)
+
+(define-public (activate-contract-with-approvals (contract-id uint))
+    (let
+        (
+            (contract (unwrap! (map-get? contracts contract-id) err-not-found))
+            (approval-req (unwrap! (map-get? contract-approval-requirements contract-id) err-not-found))
+            (approval-count (default-to u0 (map-get? contract-approval-counts contract-id)))
+        )
+        (asserts! (is-eq (get creator contract) tx-sender) err-unauthorized)
+        (asserts! (is-eq (get status contract) STATUS_PENDING) err-invalid-status)
+        (asserts! (>= approval-count (get required-approvals approval-req)) err-unauthorized)
+        (map-set contracts contract-id 
+            (merge contract { 
+                status: STATUS_ACTIVE,
+                updated-at: stacks-block-height
+            })
+        )
+        (ok true)
+    )
+)
+
+(define-read-only (get-approval-requirements (contract-id uint))
+    (ok (map-get? contract-approval-requirements contract-id))
+)
+
+(define-read-only (get-approval-status (contract-id uint) (approver principal))
+    (ok (map-get? contract-approvals { contract-id: contract-id, approver: approver }))
+)
+
+(define-read-only (get-approval-count (contract-id uint))
+    (ok (map-get? contract-approval-counts contract-id))
+)
+
+(define-read-only (is-fully-approved (contract-id uint))
+    (match (map-get? contract-approval-requirements contract-id)
+        approval-req 
+        (let
+            (
+                (current-count (default-to u0 (map-get? contract-approval-counts contract-id)))
+            )
+            (ok (>= current-count (get required-approvals approval-req)))
+        )
+        (ok false)
+    )
+)
+
+(define-read-only (get-pending-approvers (contract-id uint))
+    (match (map-get? contract-approval-requirements contract-id)
+        approval-req (ok (some (get approvers approval-req)))
+        (ok none)
     )
 )
